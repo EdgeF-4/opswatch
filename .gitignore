@@ -1,0 +1,10 @@
+# Runtime artifacts, never committed
+*.db
+*.log
+heartbeat.txt
+report.log
+config.json
+__pycache__/
+*.pyc
+.run/
+DOWN

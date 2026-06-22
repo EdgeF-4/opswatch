@@ -1,0 +1,27 @@
+[Unit]
+Description=OpsWatch self-hosted ops stack (scheduler, monitors, alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=/var/lib/opswatch
+Environment=PYTHONPATH=__APP_DIR__
+Environment=OPSWATCH_STORE_PATH=/var/lib/opswatch/opswatch.db
+Environment=OPSWATCH_STATE_DIR=/var/lib/opswatch
+# Wire a chat channel by setting a webhook URL here (kept out of the repo):
+# Environment=OPSWATCH_WEBHOOK_URL=https://hooks.example.com/your/endpoint
+ExecStart=/usr/bin/python3 -m opswatch --config __CONFIG__
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the service needs almost nothing on the box.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/opswatch
+
+[Install]
+WantedBy=multi-user.target

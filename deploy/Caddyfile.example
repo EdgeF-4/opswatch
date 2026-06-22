@@ -1,0 +1,21 @@
+# Put TLS and a login in front of the dashboard.
+#
+# The stack binds the dashboard to 127.0.0.1 only; this reverse proxy is what
+# exposes it to the internet, with an automatic HTTPS certificate and HTTP
+# basic auth. Replace the hostname, and generate a password hash with:
+#
+#   caddy hash-password
+#
+# Then reload Caddy. The dashboard is read-only, but you still want auth in
+# front of it so only you can see your operational status.
+
+status.example.com {
+    encode gzip
+
+    basic_auth {
+        # username  then the hash from `caddy hash-password`
+        admin __REPLACE_WITH_BCRYPT_HASH__
+    }
+
+    reverse_proxy 127.0.0.1:8765
+}

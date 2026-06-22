@@ -1,0 +1,57 @@
+{
+  "brand_name": "OpsWatch",
+  "store_path": "opswatch.db",
+  "dashboard": { "host": "127.0.0.1", "port": 8765 },
+  "scheduler": {
+    "tick_seconds": 2,
+    "jobs": [
+      {
+        "name": "heartbeat",
+        "kind": "builtin",
+        "target": "heartbeat",
+        "interval_seconds": 15
+      },
+      {
+        "name": "daily_report",
+        "kind": "builtin",
+        "target": "sample_report",
+        "interval_seconds": 30
+      },
+      {
+        "name": "external_sync",
+        "kind": "builtin",
+        "target": "flaky",
+        "interval_seconds": 12,
+        "max_retries": 2
+      }
+    ]
+  },
+  "monitors": {
+    "tick_seconds": 5,
+    "checks": [
+      {
+        "name": "disk_space",
+        "type": "disk",
+        "path": "/",
+        "min_free_pct": 10
+      },
+      {
+        "name": "heartbeat_fresh",
+        "type": "job_freshness",
+        "job": "heartbeat",
+        "max_age_seconds": 60
+      },
+      {
+        "name": "dashboard_endpoint",
+        "type": "http",
+        "url": "http://127.0.0.1:8765/healthz",
+        "expect_status": 200
+      }
+    ]
+  },
+  "notifications": {
+    "console": true,
+    "file": "alerts.log",
+    "webhook_env": "OPSWATCH_WEBHOOK_URL"
+  }
+}
