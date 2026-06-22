@@ -1,0 +1,33 @@
+# Run OpsWatch in a container:
+#
+#   docker compose up --build
+#   # dashboard on http://127.0.0.1:8765
+#
+# Out of the box this runs the example config so you see a working dashboard
+# immediately. To run your own jobs and monitors, copy config.example.json to
+# config.json, edit it, and uncomment the config volume below.
+services:
+  opswatch:
+    build: .
+    image: opswatch:latest
+    container_name: opswatch
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      - OPSWATCH_DASHBOARD_HOST=0.0.0.0
+      - OPSWATCH_STORE_PATH=/data/opswatch.db
+      # Alert-channel and ingest secrets are read from the environment by name,
+      # never from the config or the image. Uncomment the ones you use:
+      # - OPSWATCH_SLACK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
+      # - OPSWATCH_TELEGRAM_TOKEN=123456:abcdef
+      # - OPSWATCH_TELEGRAM_CHAT_ID=987654321
+      # - OPSWATCH_INGEST_TOKEN=long-random-string
+      # - OPSWATCH_DASHBOARD_PASSWORD=choose-a-strong-one
+    volumes:
+      - opswatch-data:/data
+      # Your own config (create config.json from config.example.json first):
+      # - ./config.json:/app/config.json:ro
+    restart: unless-stopped
+
+volumes:
+  opswatch-data:
