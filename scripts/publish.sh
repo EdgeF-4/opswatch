@@ -93,12 +93,18 @@ ensure_repo() {
   local body resp
   body="$(printf '{"name":"%s","description":"%s","private":false,"has_issues":true,"has_wiki":false}' \
     "$REPO" "$DESCRIPTION")"
-  resp="$(curl -fsS -X POST \
+  resp="$(curl -sS -X POST \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     "${API}/user/repos" -d "$body" 2>/dev/null || true)"
   if printf '%s' "$resp" | grep -q "\"full_name\""; then
     echo "Created ${GH_USER}/${REPO}."
+    return 0
+  fi
+  # A concurrent or earlier run may have created it between the check and now;
+  # treat "already exists" as success so repeated runs stay idempotent.
+  if printf '%s' "$resp" | grep -q "already exists"; then
+    echo "Repository already exists on GitHub; continuing."
     return 0
   fi
   echo "Could not create the repository automatically (the token may lack" >&2
