@@ -80,10 +80,11 @@ fi
 # Create the public repository if it does not exist yet.
 ensure_repo() {
   local code
-  code="$(curl -fsS -o /dev/null -w '%{http_code}' \
+  # A 404 here is the expected "not created yet" case, so do not use -f.
+  code="$(curl -sS -o /dev/null -w '%{http_code}' \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Accept: application/vnd.github+json" \
-    "${API}/repos/${GH_USER}/${REPO}" || true)"
+    "${API}/repos/${GH_USER}/${REPO}" 2>/dev/null || true)"
   if [ "$code" = "200" ]; then
     echo "Repository exists on GitHub."
     return 0
