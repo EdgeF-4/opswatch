@@ -34,6 +34,34 @@ runtime unless you wire up an outbound alert channel.
                           +-----------+  telegram, email, webhook
 ```
 
+## Repository layout
+
+```
+opswatch/            the package (one process, standard library only)
+  __main__.py        entrypoint: wires the loops together and runs them
+  config.py          loads one JSON file, layers env overrides on top
+  store.py           the only stateful component (SQLite, one lock)
+  scheduler.py       runs due jobs with retries, records every attempt
+  monitors.py        runs the checks, records a sample per check
+  reporting.py       time-weighted uptime, MTTR, incident timeline
+  notify.py          fans an alert out to every configured channel
+  auth.py            optional constant-time dashboard basic-auth gate
+  dashboard.py       the self-contained page plus the JSON and ingest APIs
+  jobs.py            built-in jobs (heartbeat, sample_report, flaky)
+  llm.py             LLM integrator: price book, ingest seam, watch loop, panel
+  llmcost.py         cost, cost-per-1k, projections, and the tier/model/route rollup
+  llmdrift.py        prompt and version drift detection
+  llmeval.py         labeled-dataset accuracy and hallucination scoring
+  evalrun.py         CLI that runs the eval suites and records them
+tests/               unit tests, one file per module
+deploy/              install.sh, the systemd unit, and a Caddy reverse-proxy example
+scripts/             demo.sh (self-contained demo), llm_demo.py, demo_target.py, publish.sh
+datasets/            sample labeled dataset for the eval harness
+config.example.json  full configuration reference
+config.docker.json   small self-contained config baked into the container image
+Dockerfile           standard-library image; docker-compose.yml runs it
+```
+
 ## Modules
 
 - **`config.py`** loads one JSON file, deep-merges it over defaults, and applies
