@@ -1,7 +1,18 @@
 {
   "brand_name": "OpsWatch",
   "store_path": "opswatch.db",
+  "retention_days": 30,
+
+  "theme": {
+    "tagline": "Live demo: scheduling, monitoring, and alerting on one box",
+    "logo": "🛰",
+    "accent": "#3b82f6"
+  },
+
   "dashboard": { "host": "127.0.0.1", "port": 8765 },
+
+  "ingest": { "enabled": true, "token_env": "OPSWATCH_INGEST_TOKEN" },
+
   "scheduler": {
     "tick_seconds": 2,
     "jobs": [
@@ -10,17 +21,28 @@
       { "name": "external_sync", "kind": "builtin", "target": "flaky", "interval_seconds": 10, "max_retries": 2 }
     ]
   },
+
   "monitors": {
     "tick_seconds": 3,
+    "warmup_seconds": 5,
     "checks": [
-      { "name": "disk_space", "type": "disk", "path": "/", "min_free_pct": 10 },
+      { "name": "disk_space", "type": "resource", "metric": "disk", "path": "/", "min_free_pct": 10 },
+      { "name": "memory", "type": "resource", "metric": "memory", "min_free_pct": 3 },
+      { "name": "cpu", "type": "resource", "metric": "cpu", "max_used_pct": 98 },
       { "name": "heartbeat_fresh", "type": "job_freshness", "job": "heartbeat", "max_age_seconds": 30 },
-      { "name": "payments_api", "type": "http", "url": "http://127.0.0.1:8766/health", "expect_status": 200 }
+      { "name": "payments_api", "type": "http", "url": "http://127.0.0.1:8766/health", "expect_status": 200 },
+      { "name": "nightly_sync", "type": "heartbeat", "source": "nightly-sync", "max_age_seconds": 15 },
+      { "name": "etl_pipeline", "type": "webhook", "source": "etl" }
     ]
   },
+
   "notifications": {
     "console": true,
     "file": "alerts.log",
     "webhook_env": "OPSWATCH_WEBHOOK_URL"
+  },
+
+  "reporting": {
+    "windows": [["5m", 300], ["1h", 3600], ["24h", 86400]]
   }
 }

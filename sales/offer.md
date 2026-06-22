@@ -31,15 +31,17 @@ A compact operations stack I install on your server:
 
 - **Scheduler** that runs your jobs on an interval or at a set time each day,
   with automatic retries and a full history of every run.
-- **Monitors** that continuously check the things that matter: an endpoint is
-  responding, disk space is healthy, and a job has actually run recently. That
-  last one is the check that catches a job which silently stopped.
-- **Alerting** that messages you on the channel you already use (Slack,
-  Telegram, Discord, Teams, or email) the instant something changes state, and
+- **Monitors** for everything that actually breaks: endpoint uptime with
+  response time and content checks, disk, memory, CPU and load thresholds, error
+  patterns in your logs, a dead-man's switch that notices when a scheduled job
+  goes silent, and a webhook your own automations report into so a failed run
+  surfaces the instant it happens.
+- **Alerting** that messages you on the channels you already use (Slack,
+  Telegram, email, or any webhook) the instant something changes state, and
   again when it clears. One alert per incident, not a flood.
-- **A status dashboard** that shows every job, every monitor, and a live alert
-  feed on one page, so you can answer "is everything running right now" at a
-  glance.
+- **A polished dashboard** with a live status board, per-monitor history, an
+  incident timeline, and uptime and SLA figures across 24 hour, 7 day, and 30
+  day windows, themed to your brand with an optional login in front of it.
 
 It runs on standard Python with no external dependencies, so it installs on a
 plain Linux box and keeps running whether or not I am around.
@@ -91,7 +93,7 @@ fix anything in the agreed scope at no charge.
 
 ## How it works
 
-1. **Short call.** You tell me what needs to run and where it breaks today. I
+1. **Short brief.** You tell me what needs to run and where it breaks today. I
    confirm scope and send a fixed quote. No hourly meter.
 2. **I deploy.** I harden your server, install the stack, wire your jobs,
    monitors, and alert channel, and test every alert by triggering it on
@@ -124,5 +126,5 @@ the chat channel you want alerts in.
 
 ## Next step
 
-Book a short call and I will show you the live demo. If it is a fit, you will be
+Send me a message and I will share the live demo. If it is a fit, you will be
 running on your own monitored stack inside a week.

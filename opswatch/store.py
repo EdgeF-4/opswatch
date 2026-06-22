@@ -1,9 +1,16 @@
 """Durable state for the ops stack.
 
 A thin SQLite layer that survives restarts. It records every job run, the
-current health state of each job and monitor, and the alert history shown on
-the dashboard. State transitions (ok -> failing, failing -> ok) are computed
-here so the notifier only fires on a real change, never on every tick.
+current health state of each job and monitor, the alert history, a rolling
+sample history per monitor (the data behind uptime and the history strips on
+the dashboard), the incidents opened and closed as things break and recover,
+and inbound events pushed in over the ingest endpoint (heartbeats and
+webhook-reported failures).
+
+State transitions (ok -> failing, failing -> ok) are computed here so the
+notifier only fires on a real change, never on every tick. The same transition
+also opens and closes incidents, which is what the timeline and the uptime and
+SLA report are built from.
 
 Standard library only. One connection guarded by a lock is plenty for the
 volume a single ops box produces.
@@ -48,7 +55,48 @@ CREATE TABLE IF NOT EXISTS alerts (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts (created_at);
+
+-- One row per monitor check. Powers uptime percentages and the rolling
+-- history strip on the dashboard. Pruned to a retention window on write.
+CREATE TABLE IF NOT EXISTS monitor_samples (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    monitor TEXT    NOT NULL,
+    ok      INTEGER NOT NULL,               -- 1 ok | 0 failing
+    detail  TEXT,
+    ts      REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_samples_monitor ON monitor_samples (monitor, ts);
+
+-- One row per incident. Opened when a job or monitor goes failing, closed when
+-- it recovers. The incident timeline, mean time to recovery, and the SLA report
+-- are all computed from this table.
+CREATE TABLE IF NOT EXISTS incidents (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,              -- job | monitor
+    name        TEXT NOT NULL,
+    started_at  REAL NOT NULL,
+    resolved_at REAL,                       -- NULL while ongoing
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_target ON incidents (kind, name, started_at);
+CREATE INDEX IF NOT EXISTS idx_incidents_open ON incidents (kind, name, resolved_at);
+
+-- Inbound events pushed over the ingest endpoint. A heartbeat is a row with
+-- status 'ok'; a webhook-reported failure is a row with status 'fail'. The
+-- heartbeat and webhook monitor types read the latest event per source.
+CREATE TABLE IF NOT EXISTS ingest_events (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    source  TEXT    NOT NULL,
+    status  TEXT    NOT NULL,               -- ok | fail
+    detail  TEXT,
+    ts      REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_source ON ingest_events (source, ts);
 """
+
+# Keep this many days of monitor samples and resolved incidents. Old rows are
+# pruned opportunistically so the database never grows without bound.
+_DEFAULT_RETENTION_DAYS = 30
 
 
 @dataclass
@@ -62,13 +110,33 @@ class Run:
     finished_at: float
 
 
+@dataclass
+class Incident:
+    id: int
+    kind: str
+    name: str
+    started_at: float
+    resolved_at: float | None
+    detail: str
+
+    @property
+    def ongoing(self) -> bool:
+        return self.resolved_at is None
+
+    def duration(self, now: float | None = None) -> float:
+        end = self.resolved_at if self.resolved_at is not None else (
+            time.time() if now is None else now)
+        return max(0.0, end - self.started_at)
+
+
 class Store:
-    def __init__(self, path: str):
+    def __init__(self, path: str, retention_days: int = _DEFAULT_RETENTION_DAYS):
         # check_same_thread=False because the scheduler, monitor and dashboard
         # threads share one connection; every write goes through self._lock.
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
+        self._retention_seconds = max(1, retention_days) * 86400
         with self._lock:
             self._conn.executescript(SCHEMA)
             self._conn.commit()
@@ -110,6 +178,13 @@ class Store:
         ).fetchall()
         return [_row_to_run(r) for r in rows]
 
+    def runs_for(self, job: str, limit: int = 50) -> list[Run]:
+        rows = self._conn.execute(
+            "SELECT * FROM job_runs WHERE job = ? ORDER BY started_at DESC LIMIT ?",
+            (job, limit),
+        ).fetchall()
+        return [_row_to_run(r) for r in rows]
+
     # -- health state + transitions --------------------------------------
     def get_state(self, kind: str, name: str) -> sqlite3.Row | None:
         return self._conn.execute(
@@ -127,6 +202,9 @@ class Store:
 
         `changed` is True only when the status differs from what was stored,
         which is the single signal the caller uses to decide whether to alert.
+        On a real change this also opens an incident (going failing) or closes
+        the open one (recovering), so the timeline and SLA report stay in sync
+        with the alert stream.
         """
         now = time.time() if now is None else now
         with self._lock:
@@ -145,8 +223,117 @@ class Store:
                 "since = excluded.since, updated_at = excluded.updated_at",
                 (kind, name, status, detail, since, now),
             )
+            if changed:
+                if status == "failing":
+                    self._open_incident(kind, name, detail, now)
+                elif previous == "failing":
+                    self._close_incident(kind, name, now)
             self._conn.commit()
         return changed, previous
+
+    # -- incidents --------------------------------------------------------
+    def _open_incident(self, kind: str, name: str, detail: str, now: float) -> None:
+        # Guard against a duplicate open incident if state was reset out of band.
+        existing = self._conn.execute(
+            "SELECT id FROM incidents WHERE kind = ? AND name = ? "
+            "AND resolved_at IS NULL LIMIT 1",
+            (kind, name),
+        ).fetchone()
+        if existing:
+            return
+        self._conn.execute(
+            "INSERT INTO incidents (kind, name, started_at, resolved_at, detail) "
+            "VALUES (?, ?, ?, NULL, ?)",
+            (kind, name, now, detail),
+        )
+
+    def _close_incident(self, kind: str, name: str, now: float) -> None:
+        self._conn.execute(
+            "UPDATE incidents SET resolved_at = ? "
+            "WHERE id = (SELECT id FROM incidents WHERE kind = ? AND name = ? "
+            "AND resolved_at IS NULL ORDER BY started_at DESC LIMIT 1)",
+            (now, kind, name),
+        )
+
+    def recent_incidents(self, limit: int = 50) -> list[Incident]:
+        rows = self._conn.execute(
+            "SELECT * FROM incidents ORDER BY started_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [_row_to_incident(r) for r in rows]
+
+    def incidents_since(self, since_ts: float) -> list[Incident]:
+        # Any incident that was open at some point at or after the window start:
+        # it started in the window, or it started earlier and is still open or
+        # resolved inside the window.
+        rows = self._conn.execute(
+            "SELECT * FROM incidents WHERE started_at >= ? "
+            "OR resolved_at IS NULL OR resolved_at >= ? "
+            "ORDER BY started_at DESC",
+            (since_ts, since_ts),
+        ).fetchall()
+        return [_row_to_incident(r) for r in rows]
+
+    def open_incident_count(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM incidents WHERE resolved_at IS NULL"
+        ).fetchone()
+        return int(row["n"])
+
+    # -- monitor samples (history + uptime) -------------------------------
+    def record_sample(self, monitor: str, ok: bool, detail: str,
+                      now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO monitor_samples (monitor, ok, detail, ts) "
+                "VALUES (?, ?, ?, ?)",
+                (monitor, 1 if ok else 0, detail, now),
+            )
+            self._conn.execute(
+                "DELETE FROM monitor_samples WHERE ts < ?",
+                (now - self._retention_seconds,),
+            )
+            self._conn.commit()
+
+    def recent_samples(self, monitor: str, limit: int = 60) -> list[sqlite3.Row]:
+        rows = self._conn.execute(
+            "SELECT ok, detail, ts FROM monitor_samples WHERE monitor = ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (monitor, limit),
+        ).fetchall()
+        return list(reversed(rows))
+
+    def sample_uptime(self, monitor: str, since_ts: float) -> tuple[int, int]:
+        """Return (ok_count, total_count) of samples since a timestamp."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS total, COALESCE(SUM(ok), 0) AS ok "
+            "FROM monitor_samples WHERE monitor = ? AND ts >= ?",
+            (monitor, since_ts),
+        ).fetchone()
+        return int(row["ok"]), int(row["total"])
+
+    # -- inbound ingest (heartbeats + webhook failures) -------------------
+    def record_ingest(self, source: str, status: str, detail: str,
+                      now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO ingest_events (source, status, detail, ts) "
+                "VALUES (?, ?, ?, ?)",
+                (source, status, detail, now),
+            )
+            self._conn.execute(
+                "DELETE FROM ingest_events WHERE ts < ?",
+                (now - self._retention_seconds,),
+            )
+            self._conn.commit()
+
+    def last_ingest(self, source: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT source, status, detail, ts FROM ingest_events "
+            "WHERE source = ? ORDER BY ts DESC LIMIT 1",
+            (source,),
+        ).fetchone()
 
     # -- alerts -----------------------------------------------------------
     def record_alert(self, source: str, severity: str, title: str,
@@ -171,4 +358,12 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         job=row["job"], status=row["status"], attempt=row["attempt"],
         exit_code=row["exit_code"], output_tail=row["output_tail"] or "",
         started_at=row["started_at"], finished_at=row["finished_at"],
+    )
+
+
+def _row_to_incident(row: sqlite3.Row) -> Incident:
+    return Incident(
+        id=row["id"], kind=row["kind"], name=row["name"],
+        started_at=row["started_at"], resolved_at=row["resolved_at"],
+        detail=row["detail"] or "",
     )

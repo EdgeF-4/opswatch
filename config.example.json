@@ -1,57 +1,148 @@
 {
   "brand_name": "OpsWatch",
   "store_path": "opswatch.db",
-  "dashboard": { "host": "127.0.0.1", "port": 8765 },
+  "retention_days": 30,
+
+  "theme": {
+    "brand_name": "OpsWatch",
+    "tagline": "Self-hosted operations monitoring",
+    "logo": "",
+    "accent": "#3b82f6",
+    "ok_color": "#3fb950",
+    "fail_color": "#f85149",
+    "warn_color": "#d29922",
+    "footer": "Self-hosted operations monitoring."
+  },
+
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "auth": {
+      "enabled": false,
+      "username": "admin",
+      "password_env": "OPSWATCH_DASHBOARD_PASSWORD",
+      "password_hash_env": "OPSWATCH_DASHBOARD_PASSWORD_SHA256",
+      "realm": "OpsWatch"
+    }
+  },
+
+  "ingest": {
+    "enabled": false,
+    "token_env": "OPSWATCH_INGEST_TOKEN"
+  },
+
   "scheduler": {
     "tick_seconds": 2,
     "jobs": [
       {
+        "name": "nightly_backup",
+        "kind": "command",
+        "target": "/usr/local/bin/backup.sh",
+        "daily_at": "02:30",
+        "max_retries": 1
+      },
+      {
+        "name": "crm_sync",
+        "kind": "command",
+        "target": "python3 /opt/scripts/sync.py",
+        "interval_seconds": 300,
+        "max_retries": 2
+      },
+      {
         "name": "heartbeat",
         "kind": "builtin",
         "target": "heartbeat",
-        "interval_seconds": 15
-      },
-      {
-        "name": "daily_report",
-        "kind": "builtin",
-        "target": "sample_report",
         "interval_seconds": 30
-      },
-      {
-        "name": "external_sync",
-        "kind": "builtin",
-        "target": "flaky",
-        "interval_seconds": 12,
-        "max_retries": 2
       }
     ]
   },
+
   "monitors": {
     "tick_seconds": 5,
+    "warmup_seconds": 5,
     "checks": [
       {
+        "name": "api_up",
+        "type": "http",
+        "url": "https://example.com/health",
+        "expect_status": 200,
+        "contains": "ok",
+        "max_latency_ms": 2000
+      },
+      {
         "name": "disk_space",
-        "type": "disk",
+        "type": "resource",
+        "metric": "disk",
         "path": "/",
         "min_free_pct": 10
       },
       {
-        "name": "heartbeat_fresh",
-        "type": "job_freshness",
-        "job": "heartbeat",
-        "max_age_seconds": 60
+        "name": "memory",
+        "type": "resource",
+        "metric": "memory",
+        "min_free_pct": 8
       },
       {
-        "name": "dashboard_endpoint",
-        "type": "http",
-        "url": "http://127.0.0.1:8765/healthz",
-        "expect_status": 200
+        "name": "cpu",
+        "type": "resource",
+        "metric": "cpu",
+        "max_used_pct": 92
+      },
+      {
+        "name": "load",
+        "type": "resource",
+        "metric": "load",
+        "max_load_per_cpu": 3.0
+      },
+      {
+        "name": "backup_fresh",
+        "type": "job_freshness",
+        "job": "nightly_backup",
+        "max_age_seconds": 93600
+      },
+      {
+        "name": "nightly_etl",
+        "type": "heartbeat",
+        "source": "nightly-etl",
+        "max_age_seconds": 90000
+      },
+      {
+        "name": "ingest_pipeline",
+        "type": "webhook",
+        "source": "ingest-pipeline"
+      },
+      {
+        "name": "app_errors",
+        "type": "log_pattern",
+        "path": "/var/log/myapp/app.log",
+        "pattern": "ERROR|CRITICAL|Traceback",
+        "ignore_pattern": "healthcheck",
+        "max_matches": 0
       }
     ]
   },
+
   "notifications": {
     "console": true,
     "file": "alerts.log",
-    "webhook_env": "OPSWATCH_WEBHOOK_URL"
+    "webhook_env": "OPSWATCH_WEBHOOK_URL",
+    "channels": [
+      { "type": "slack", "url_env": "OPSWATCH_SLACK_URL" },
+      { "type": "telegram", "token_env": "OPSWATCH_TELEGRAM_TOKEN", "chat_id_env": "OPSWATCH_TELEGRAM_CHAT_ID" },
+      {
+        "type": "email",
+        "host": "smtp.example.com",
+        "port": 587,
+        "use_tls": true,
+        "from": "ops@example.com",
+        "to": ["you@example.com"],
+        "username_env": "OPSWATCH_SMTP_USER",
+        "password_env": "OPSWATCH_SMTP_PASSWORD"
+      }
+    ]
+  },
+
+  "reporting": {
+    "windows": [["24h", 86400], ["7d", 604800], ["30d", 2592000]]
   }
 }

@@ -10,8 +10,18 @@ WorkingDirectory=/var/lib/opswatch
 Environment=PYTHONPATH=__APP_DIR__
 Environment=OPSWATCH_STORE_PATH=/var/lib/opswatch/opswatch.db
 Environment=OPSWATCH_STATE_DIR=/var/lib/opswatch
-# Wire a chat channel by setting a webhook URL here (kept out of the repo):
+# Secrets live here, never in the repo or the config file. Uncomment the ones
+# you use. Each maps to a channel or feature declared in the config:
 # Environment=OPSWATCH_WEBHOOK_URL=https://hooks.example.com/your/endpoint
+# Environment=OPSWATCH_SLACK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
+# Environment=OPSWATCH_TELEGRAM_TOKEN=123456:abcdef
+# Environment=OPSWATCH_TELEGRAM_CHAT_ID=987654321
+# Environment=OPSWATCH_SMTP_USER=ops@example.com
+# Environment=OPSWATCH_SMTP_PASSWORD=app-password-here
+# Dashboard login (optional, set "auth.enabled": true in the config too):
+# Environment=OPSWATCH_DASHBOARD_PASSWORD=choose-a-strong-one
+# Token external jobs use to post heartbeats and failures to /api/ingest:
+# Environment=OPSWATCH_INGEST_TOKEN=long-random-string
 ExecStart=/usr/bin/python3 -m opswatch --config __CONFIG__
 Restart=on-failure
 RestartSec=5

@@ -1,0 +1,99 @@
+# Architecture
+
+OpsWatch is a single Python process that runs three loops over one shared SQLite
+store, plus a dashboard that reads from it. Everything is standard library, so
+there is nothing to install beyond `python3` and nothing external to reach at
+runtime unless you wire up an outbound alert channel.
+
+```
+                         +------------------+
+   config.json  ----->   |  config.load()   |
+   env vars     ----->   +------------------+
+                                  |
+        +-------------------------+--------------------------+
+        |                         |                          |
+   +---------+              +-----------+              +-------------+
+   |Scheduler|              |MonitorRun |              | Dashboard   |
+   | thread  |              | thread    |              | HTTP thread |
+   +----+----+              +-----+-----+              +------+------+
+        |                         |                           |
+        |  record_run/transition  |  record_sample/transition |  reads
+        +-----------+-------------+-------------+-------------+
+                    |                           |
+               +----v---------------------------v----+
+               |              Store (SQLite)         |
+               |  job_runs  state  alerts            |
+               |  monitor_samples  incidents  ingest |
+               +----------------+--------------------+
+                                |
+                          on a state change
+                                |
+                          +-----v-----+
+                          | Notifier  |  console, file, slack,
+                          +-----------+  telegram, email, webhook
+```
+
+## Modules
+
+- **`config.py`** loads one JSON file, deep-merges it over defaults, and applies
+  a few environment overrides. Secrets are never values in the file; the config
+  holds the *name* of an environment variable and the value is read at runtime.
+- **`store.py`** is the only stateful component. One SQLite connection guarded by
+  a lock serves all threads. It records job runs, the current health state of
+  every target, the alert log, a rolling per-monitor sample history, the
+  incidents opened and closed as things break and recover, and inbound ingest
+  events. `transition()` is the heart of it: it computes whether a status
+  actually changed (the single signal that gates alerting) and, on a real
+  change, opens or closes the matching incident.
+- **`scheduler.py`** decides which jobs are due (`is_due`, a pure function that is
+  unit tested in isolation), runs each due job in its own short-lived thread with
+  retries, records every attempt, and alerts on a healthy-to-failing transition
+  and again on recovery.
+- **`monitors.py`** runs the checks. Each check is a small function returning
+  `(ok, detail)`. The runner records a sample for every check (which is what
+  uptime and the history strips are built from) and alerts on state changes.
+- **`reporting.py`** derives time-weighted uptime, downtime, mean time to
+  recovery, and the incident timeline from the incidents table. Uptime is the
+  share of a window with no open incident, which is the figure an SLA is written
+  against.
+- **`notify.py`** fans an alert out to every configured channel. Each channel is
+  independent and a delivery failure is logged, never raised, so a broken
+  notification path can never take down the loop that produced the alert.
+- **`auth.py`** is the optional dashboard basic-auth gate, comparing credentials
+  in constant time against a password or SHA-256 hash read from the environment.
+- **`dashboard.py`** serves one self-contained page and a handful of JSON APIs,
+  plus the token-gated ingest endpoint. The page is themed from the config at
+  request time, so the same binary white-labels to any brand.
+- **`__main__.py`** wires the pieces together, starts the three threads, and
+  shuts them down cleanly on a signal so it behaves under `systemd`.
+
+## Why alerting only fires on a change
+
+A naive monitor pages on every failing tick, which trains you to ignore it. Here
+the store computes a real state transition, and only a transition produces an
+alert and an incident. A five hour outage is one critical alert and one
+recovered alert, with a single incident that carries the full duration.
+
+## The two inbound monitor types
+
+`heartbeat` and `webhook` are push based. An external job posts to
+`/api/ingest` with a source name and an `ok` or `fail` status. A heartbeat
+monitor goes failing when no event has arrived inside its window (the dead-man's
+switch); a webhook monitor reflects the latest reported status. Both read the
+same `ingest_events` table. The endpoint is gated by a token so only your own
+jobs can post to it.
+
+## Concurrency and durability
+
+Three loops share one SQLite connection through a single lock. Writes are small
+and infrequent (a tick every few seconds), so contention is a non-issue at the
+volume one ops box produces. State lives in SQLite, so a restart loses nothing:
+job history, current health, open incidents, and the sample history all survive.
+
+## Testing
+
+Every module has unit tests under `tests/`, run with
+`python3 -m unittest discover -s tests`. Pure decision functions (`is_due`,
+uptime math, auth checks) are tested directly; the dashboard, ingest, and the
+network-touching pieces are tested against throwaway loopback servers so the
+suite stays fast and self-contained with no external dependencies.

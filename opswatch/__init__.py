@@ -5,4 +5,4 @@ your jobs on a schedule, watches that they keep working, and alerts you the
 moment something breaks, so you find out before your customers do.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

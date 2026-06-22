@@ -6,8 +6,9 @@
 #
 #   caddy hash-password
 #
-# Then reload Caddy. The dashboard is read-only, but you still want auth in
-# front of it so only you can see your operational status.
+# Then reload Caddy. The dashboard can also gate itself with the built-in login
+# (set "auth.enabled": true in the config), but terminating TLS and auth at the
+# proxy is the cleaner production setup. Use either or both.
 
 status.example.com {
     encode gzip

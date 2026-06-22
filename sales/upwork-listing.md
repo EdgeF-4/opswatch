@@ -18,6 +18,7 @@ Alternate, shorter:
 
 Other keywords to seed into the overview and skills: workflow automation, Make.com,
 Zapier alternative, API integration, webhook, cron, DevOps, uptime monitoring,
+SLA reporting, heartbeat monitoring, incident alerting, status dashboard,
 alerting, server setup.
 
 ---
@@ -39,14 +40,20 @@ Here is what I install and configure for you:
 
 - A scheduler that runs your jobs on an interval or at a set time each day, with
   retries and a full history of every run.
-- Monitors that check the things that matter: an endpoint is responding, disk
-  space is healthy, and each job has actually run recently. That last check is
-  the one that catches a job which silently stopped.
-- Alerts to the channel you already use (Slack, Telegram, Discord, Teams, or
-  email), sent the moment something changes and again when it clears, so you get
-  one alert per incident instead of a flood.
-- A single status dashboard that shows every job, every monitor, and a live
-  alert feed, so you can see at a glance that everything is running.
+- A full set of monitors that check the things that actually break: endpoint
+  uptime with response time and body checks, disk, memory, CPU and load
+  thresholds, error patterns appearing in your logs, a dead-man's switch that
+  notices when a scheduled job goes silent, and a webhook your own automations
+  report into so a failed run shows up the instant it happens.
+- Alerts to the channels you already use, Slack, Telegram, email, or any
+  webhook, sent the moment something changes and again when it clears, so you
+  get one alert per incident instead of a flood.
+- A polished status dashboard with a live status board, per-monitor history, an
+  incident timeline, and uptime and SLA figures across 24 hour, 7 day, and 30
+  day windows, so you can answer "is everything running, and how has it been" at
+  a glance.
+- Everything themed to your brand: your name, logo, and colors on the dashboard,
+  with an optional login in front of it.
 
 It runs on standard Python with no external dependencies, so it installs on a
 plain Linux VPS and keeps running on its own. I harden the server, set up a
@@ -54,9 +61,10 @@ service that restarts on failure and starts on boot, and put TLS and a login in
 front of the dashboard.
 
 Before you commit, I will show you the whole thing running live: scheduled jobs
-firing, a monitored service going down, and the alert arriving in chat within
-seconds, then clearing by itself when the service recovers. You watch a failure
-get caught in real time.
+firing, a monitored service going down, a pipeline reporting a failure, and the
+alerts arriving within seconds, then clearing by themselves when each one
+recovers, with every incident logged and counted against uptime. You watch
+failures get caught in real time.
 
 ## Packages
 
@@ -82,13 +90,13 @@ clients.
 
 - Access to a VPS (I can recommend one that runs for about the price of a couple
   of coffees a month).
-- A short call to tell me what needs to run and where it breaks today.
+- A short written brief on what needs to run and where it breaks today.
 - The chat channel you want your alerts in.
 
 ## How it works
 
-1. We hop on a short call and I confirm scope, then send a fixed quote. No
-   hourly meter.
+1. You send me what needs to run and where it breaks, I confirm scope, then send
+   a fixed quote. No hourly meter.
 2. I deploy, wire your jobs and monitors and alerts, and test every alert by
    triggering it on purpose.
 3. I hand off admin access, a runbook, and a walkthrough. You own all of it.
@@ -121,9 +129,15 @@ The monitoring does the watching and alerts me automatically. I am clear about
 response windows up front and document everything, so nothing relies on me being
 awake. I will not promise an overnight pager I cannot honor.
 
+**Do I get uptime numbers I can show a client or a boss?**
+Yes. The dashboard tracks every incident and reports time-weighted uptime across
+24 hour, 7 day, and 30 day windows, along with how long each outage lasted and
+the average time to recovery. If you resell this, it white-labels to your brand.
+
 **Do you work with my existing n8n, Make, or cron jobs?**
 Yes. I deploy the monitoring and scheduling layer around whatever you already
 run, and I can move scheduled jobs onto your own server if you want off metered
-billing.
+billing. A one-line check-in at the end of any existing job lets the dead-man's
+switch catch it the moment it stops running.
 
 Message me with what you are running today and I will show you the live demo.
