@@ -75,8 +75,10 @@ def _build_status(store, display_brand: str) -> dict:
     }
 
 
-def _make_handler(store, display_brand, theme, report_windows, auth, ingest_token):
-    boot = json.dumps({"brand": display_brand, "theme": theme})
+def _make_handler(store, display_brand, theme, report_windows, auth, ingest_token,
+                  llm_panel=None, llm_ingest=None):
+    boot = json.dumps({"brand": display_brand, "theme": theme,
+                       "llm_enabled": llm_panel is not None})
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # silence default request logging
@@ -117,6 +119,8 @@ def _make_handler(store, display_brand, theme, report_windows, auth, ingest_toke
                 self._json(200, reporting.build_report(store, report_windows))
             elif path.startswith("/api/incidents"):
                 self._json(200, {"incidents": reporting.timeline(store, 100)})
+            elif path.startswith("/api/llm"):
+                self._json(200, llm_panel() if llm_panel else {"enabled": False})
             elif path in ("/", "/index.html"):
                 self._send(200, PAGE.replace("__BRAND__", display_brand)
                            .replace("__BOOT__", boot).encode("utf-8"),
@@ -131,6 +135,8 @@ def _make_handler(store, display_brand, theme, report_windows, auth, ingest_toke
             path = self.path.split("?", 1)[0]
             if path == "/api/ingest":
                 self._handle_ingest()
+            elif path == "/api/llm/ingest":
+                self._handle_llm_ingest()
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -161,6 +167,38 @@ def _make_handler(store, display_brand, theme, report_windows, auth, ingest_toke
             store.record_ingest(source, status, detail)
             self._json(202, {"ok": True, "source": source, "status": status})
 
+        def _handle_llm_ingest(self):
+            """Token-gated endpoint to log one prediction's cost and metadata.
+
+            The body is a provider-agnostic JSON record (model, token counts,
+            route, prompt, prompt_version, ok, quality). Cost and tier are
+            computed server-side from the configured price book.
+            """
+            if llm_ingest is None or ingest_token is None:
+                self._send(404, b"llm ingest disabled", "text/plain")
+                return
+            supplied = (self.headers.get("X-OpsWatch-Token")
+                        or _query_param(self.path, "token"))
+            if supplied != ingest_token:
+                self._send(401, b"bad ingest token", "text/plain")
+                return
+            try:
+                length = min(int(self.headers.get("Content-Length", 0)), _MAX_INGEST_BODY)
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw or b"{}")
+            except Exception:  # noqa: BLE001 - a bad body is a client error, not a crash
+                self._json(400, {"ok": False, "error": "invalid json body"})
+                return
+            if not payload.get("model"):
+                self._json(400, {"ok": False, "error": "missing model"})
+                return
+            try:
+                result = llm_ingest(payload)
+            except Exception as exc:  # noqa: BLE001 - report, never crash the server
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            self._json(202, {"ok": True, **result})
+
     return Handler
 
 
@@ -178,9 +216,10 @@ def _query_param(path: str, key: str) -> str | None:
 
 def start_dashboard(host: str, port: int, store, display_brand: str, theme: dict,
                     report_windows, auth, ingest_token,
-                    stop: threading.Event) -> ThreadingHTTPServer:
+                    stop: threading.Event, llm_panel=None,
+                    llm_ingest=None) -> ThreadingHTTPServer:
     handler = _make_handler(store, display_brand, theme, report_windows,
-                            auth, ingest_token)
+                            auth, ingest_token, llm_panel, llm_ingest)
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.timeout = 1
 
@@ -256,6 +295,10 @@ PAGE = """<!doctype html>
   .strip { display: inline-flex; gap: 2px; align-items: flex-end; }
   .strip i { width: 5px; height: 16px; border-radius: 1px; background: var(--ok); opacity: .85; }
   .strip i.bad { background: var(--fail); }
+  .tstrip { display: inline-flex; gap: 2px; align-items: flex-end; height: 28px; }
+  .tstrip i { width: 6px; border-radius: 1px; background: var(--ok); opacity: .85; }
+  .tstrip i.warn { background: var(--warn); } .tstrip i.bad { background: var(--fail); }
+  .big { font-size: 22px; font-weight: 700; } .grid2 { display: grid; gap: 6px; }
   .feed div { padding: 9px 12px; border-bottom: 1px solid var(--line); }
   .mono { font-variant-numeric: tabular-nums; }
   footer { color: var(--muted); font-size: 12px; padding: 18px 24px; border-top: 1px solid var(--line); }
@@ -277,6 +320,7 @@ PAGE = """<!doctype html>
   <button data-view="overview" class="active">Overview</button>
   <button data-view="monitors">Monitors</button>
   <button data-view="jobs">Jobs</button>
+  <button data-view="llm" id="llmtab">LLM</button>
   <button data-view="incidents">Incidents</button>
   <button data-view="reports">Reports</button>
 </nav>
@@ -297,6 +341,22 @@ PAGE = """<!doctype html>
     <h2>Scheduled jobs</h2>
     <table id="jobtable"><thead><tr><th>Job</th><th>State</th>
       <th>Last run</th><th>24h uptime</th><th>Detail</th></tr></thead><tbody></tbody></table>
+  </section>
+  <section class="view" id="llm">
+    <div class="kpis" id="llmkpis"></div>
+    <h2>Spend by routing tier</h2>
+    <table id="tiertable"><thead><tr><th>Tier</th><th>Spend</th>
+      <th>Predictions</th><th>$/1k</th><th>Share</th></tr></thead><tbody></tbody></table>
+    <h2>Spend by model</h2>
+    <table id="modeltable"><thead><tr><th>Model</th><th>Spend</th>
+      <th>Predictions</th><th>$/1k</th><th>Errors</th></tr></thead><tbody></tbody></table>
+    <h2>Spend by route</h2>
+    <table id="routetable"><thead><tr><th>Route</th><th>Spend</th>
+      <th>Predictions</th><th>$/1k</th><th>Share</th></tr></thead><tbody></tbody></table>
+    <h2>Prompt drift</h2>
+    <div class="cards" id="driftcards"></div>
+    <h2>Eval health</h2>
+    <div class="cards" id="evalcards"></div>
   </section>
   <section class="view" id="incidents">
     <h2>Incident timeline</h2>
@@ -326,6 +386,7 @@ function applyTheme(t){
   else if(t.logo){ logo.textContent = t.logo; }
 }
 applyTheme(BOOT.theme || {});
+if(!BOOT.llm_enabled){ const t = document.getElementById('llmtab'); if(t) t.remove(); }
 
 let view = 'overview';
 document.querySelectorAll('nav button').forEach(b=>{
@@ -344,6 +405,14 @@ function dur(s){ if(s<60) return s+'s'; if(s<3600) return Math.floor(s/60)+'m '+
   if(s<86400) return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';
   return Math.floor(s/86400)+'d '+Math.floor((s%86400)/3600)+'h'; }
 function pct(v){ return (v==null?'--':Number(v).toFixed(2)+'%'); }
+function pct0(v){ return (v==null?'--':Math.round(Number(v)*100)+'%'); }
+function money(v){ if(v==null) return '--'; v=Number(v);
+  return '$'+(v>=1000 ? v.toLocaleString(undefined,{maximumFractionDigits:0})
+                      : v.toFixed(v<10?4:2)); }
+function qbars(trend){ if(!trend||!trend.length) return '<span class="muted">no runs</span>';
+  return '<span class="tstrip">'+trend.map(a=>{ const h=Math.max(4,Math.round(a*28));
+    const cls=a>=0.8?'':(a>=0.6?'warn':'bad');
+    return '<i class="'+cls+'" style="height:'+h+'px" title="'+pct0(a)+'"></i>'; }).join('')+'</span>'; }
 function strip(hist){ if(!hist || !hist.length) return '<span class="muted">no data</span>';
   return '<span class="strip">'+hist.map(o=>'<i class="'+(o?'':'bad')+'"></i>').join('')+'</span>'; }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
@@ -417,10 +486,68 @@ async function renderReport(){
   }).join('') : '<tr><td class="empty" colspan="9">No data yet.</td></tr>';
 }
 
+async function renderLLM(){
+  const d = await getJSON('/api/llm');
+  if(!d.enabled){
+    document.getElementById('llmkpis').innerHTML =
+      '<div class="empty">LLM observability is not configured.</div>';
+    ['tiertable','modeltable','routetable'].forEach(id=>
+      document.querySelector('#'+id+' tbody').innerHTML = '');
+    document.getElementById('driftcards').innerHTML = '';
+    document.getElementById('evalcards').innerHTML = '';
+    return;
+  }
+  const c = d.cost;
+  const kpis = [
+    ['Spend (window)', money(c.total_cost_usd)],
+    ['Predictions', c.predictions],
+    ['$ / 1k predictions', money(c.dollars_per_1k)],
+    ['Projected monthly', money(c.projected_monthly_at_scale_usd!=null
+        ? c.projected_monthly_at_scale_usd : c.projected_monthly_runrate_usd)],
+    ['Error rate', pct0(c.error_rate)],
+  ];
+  document.getElementById('llmkpis').innerHTML = kpis.map(k=>
+    '<div class="kpi"><div class="v">'+k[1]+'</div><div class="l">'+k[0]+'</div></div>').join('');
+
+  const rows = (arr, share)=> arr.length ? arr.map(r=>
+    '<tr><td>'+esc(r.key)+'</td><td class="mono">'+money(r.cost_usd)+'</td>'+
+    '<td class="mono">'+r.count+'</td><td class="mono">'+money(r.dollars_per_1k)+'</td>'+
+    '<td class="mono">'+(share?pct(r.share_pct):pct0(r.error_rate))+'</td></tr>').join('')
+    : '<tr><td class="empty" colspan="5">No calls in window.</td></tr>';
+  document.querySelector('#tiertable tbody').innerHTML = rows(c.by_tier, true);
+  document.querySelector('#modeltable tbody').innerHTML = rows(c.by_model, false);
+  document.querySelector('#routetable tbody').innerHTML = rows(c.by_route, true);
+
+  document.getElementById('driftcards').innerHTML = d.drift.length ? d.drift.map(p=>{
+    const st = !p.enough_data ? ['warning','insufficient data']
+      : (p.drifted ? ['failing','drift detected'] : ['ok','stable']);
+    return '<div class="card"><div class="top"><span class="name">'+esc(p.name)+
+      '</span><span class="pill '+st[0]+'">'+st[1]+'</span></div>'+
+      '<div class="meta">baseline '+esc(p.baseline_version)+' &middot; candidate '+
+      esc(p.candidate_version||'--')+'</div>'+
+      '<div class="detail">'+(p.reasons.length?esc(p.reasons.join('; ')):'no shift over thresholds')+
+      '</div></div>'; }).join('') : '<div class="empty">No prompts tracked.</div>';
+
+  document.getElementById('evalcards').innerHTML = d.evals.length ? d.evals.map(e=>{
+    const L = e.latest;
+    const pillcls = !L ? 'warning' : (L.status==='pass'?'ok':'failing');
+    const pilltxt = !L ? 'no runs' : L.status;
+    const body = L ? '<div class="grid2"><div class="big">'+pct0(L.accuracy)+
+      ' <span class="muted" style="font-size:13px">accuracy</span></div>'+
+      '<div class="meta">hallucination '+pct0(L.hallucination_rate)+' &middot; quality '+
+      Number(L.quality).toFixed(2)+' &middot; '+L.passed+'/'+L.total+' &middot; '+ago(L.ago_seconds)+'</div>'+
+      '<div>'+qbars(e.trend)+'</div></div>'
+      : '<div class="detail muted">no eval runs recorded yet</div>';
+    return '<div class="card"><div class="top"><span class="name">'+esc(e.name)+
+      '</span><span class="pill '+pillcls+'">'+pilltxt+'</span></div>'+body+'</div>';
+  }).join('') : '<div class="empty">No eval suites configured.</div>';
+}
+
 async function refresh(){
   try{
     if(view==='incidents') await renderIncidents();
     else if(view==='reports') await renderReport();
+    else if(view==='llm') await renderLLM();
     else await renderStatus();
   }catch(e){ /* keep trying on the next tick */ }
 }

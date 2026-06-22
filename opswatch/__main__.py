@@ -16,6 +16,7 @@ import threading
 
 from . import __version__, auth as auth_mod, config as config_mod
 from .dashboard import start_dashboard
+from .llm import LLMRunner, LLMSettings, Pricing, build_llm_panel, record_call
 from .monitors import Monitor, MonitorRunner
 from .notify import Notifier
 from .scheduler import Job, Scheduler
@@ -49,6 +50,30 @@ def main(argv: list[str] | None = None) -> int:
     auth = auth_mod.from_config(cfg.dashboard, cfg.env)
     ingest_token = cfg.ingest_token
 
+    # LLM observability: optional, off unless the config turns it on.
+    llm_settings = LLMSettings.from_dict(cfg.llm)
+    pricing = Pricing.from_settings(llm_settings)
+    llm_runner = LLMRunner(llm_settings, store, notifier, pricing)
+    llm_panel = None
+    llm_ingest = None
+    if llm_settings.enabled:
+        llm_panel = lambda: build_llm_panel(store, llm_settings, pricing)  # noqa: E731
+
+        def llm_ingest(payload):  # noqa: F811 - wired only when enabled
+            cost = record_call(
+                store, pricing, model=payload["model"],
+                input_tokens=int(payload.get("input_tokens", 0)),
+                output_tokens=int(payload.get("output_tokens", 0)),
+                route=str(payload.get("route", "")),
+                prompt=str(payload.get("prompt", "")),
+                prompt_version=str(payload.get("prompt_version", "")),
+                tier=payload.get("tier"),
+                ok=bool(payload.get("ok", True)),
+                quality=payload.get("quality"),
+                latency_ms=int(payload.get("latency_ms", 0)),
+                detail=str(payload.get("detail", ""))[:500])
+            return {"model": payload["model"], "cost_usd": cost}
+
     stop = threading.Event()
 
     def shutdown(signum, frame):
@@ -61,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     start_dashboard(
         cfg.dashboard["host"], cfg.dashboard["port"], store,
         cfg.display_brand, cfg.theme, cfg.report_windows,
-        auth, ingest_token, stop,
+        auth, ingest_token, stop, llm_panel=llm_panel, llm_ingest=llm_ingest,
     )
     threading.Thread(
         target=scheduler.run_forever,
@@ -72,11 +97,17 @@ def main(argv: list[str] | None = None) -> int:
         args=(stop, cfg.monitors.get("tick_seconds", 5),
               cfg.monitors.get("warmup_seconds", 5)), daemon=True,
     ).start()
+    if llm_settings.enabled:
+        threading.Thread(
+            target=llm_runner.run_forever,
+            args=(stop, llm_settings.tick_seconds), daemon=True,
+        ).start()
 
     logging.getLogger("opswatch").info(
-        "%s is running (dashboard http://%s:%d, auth %s, ingest %s)",
+        "%s is running (dashboard http://%s:%d, auth %s, ingest %s, llm %s)",
         cfg.display_brand, cfg.dashboard["host"], cfg.dashboard["port"],
         "on" if auth else "off", "on" if ingest_token else "off",
+        "on" if llm_settings.enabled else "off",
     )
     stop.wait()
     store.close()

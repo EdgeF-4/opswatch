@@ -92,6 +92,48 @@ CREATE TABLE IF NOT EXISTS ingest_events (
     ts      REAL    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ingest_source ON ingest_events (source, ts);
+
+-- One row per language-model call (a single prediction). This is the data
+-- behind dollar cost per call and per 1000 predictions, the projected monthly
+-- spend, the breakdown by model, route and tier, and prompt-version drift. Cost
+-- is computed from the token counts and a per-model price book at write time, so
+-- the dashboard never has to know about pricing. Pruned to the retention window.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts             REAL    NOT NULL,
+    model          TEXT    NOT NULL,
+    route          TEXT    NOT NULL DEFAULT '',  -- engine/feature this call served
+    tier           TEXT    NOT NULL DEFAULT '',  -- cheap | standard | hard
+    prompt         TEXT    NOT NULL DEFAULT '',  -- prompt name, for drift tracking
+    prompt_version TEXT    NOT NULL DEFAULT '',  -- prompt version, for drift tracking
+    input_tokens   INTEGER NOT NULL DEFAULT 0,
+    output_tokens  INTEGER NOT NULL DEFAULT 0,
+    cost_usd       REAL    NOT NULL DEFAULT 0,
+    latency_ms     INTEGER NOT NULL DEFAULT 0,
+    ok             INTEGER NOT NULL DEFAULT 1,   -- 1 success | 0 error
+    quality        REAL,                         -- optional 0..1 quality score
+    detail         TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_ts ON llm_calls (ts);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_prompt ON llm_calls (prompt, prompt_version, ts);
+
+-- One row per eval-harness run against a labeled dataset. Powers the eval health
+-- card and its accuracy trend on the dashboard. Pruned to the retention window.
+CREATE TABLE IF NOT EXISTS llm_evals (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts                 REAL    NOT NULL,
+    suite              TEXT    NOT NULL,
+    prompt             TEXT    NOT NULL DEFAULT '',
+    prompt_version     TEXT    NOT NULL DEFAULT '',
+    total              INTEGER NOT NULL DEFAULT 0,
+    passed             INTEGER NOT NULL DEFAULT 0,
+    accuracy           REAL    NOT NULL DEFAULT 0,
+    hallucination_rate REAL    NOT NULL DEFAULT 0,
+    quality            REAL    NOT NULL DEFAULT 0,
+    status             TEXT    NOT NULL DEFAULT 'pass',  -- pass | fail
+    detail             TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_llm_evals_suite ON llm_evals (suite, ts);
 """
 
 # Keep this many days of monitor samples and resolved incidents. Old rows are
@@ -127,6 +169,38 @@ class Incident:
         end = self.resolved_at if self.resolved_at is not None else (
             time.time() if now is None else now)
         return max(0.0, end - self.started_at)
+
+
+@dataclass
+class LLMCall:
+    model: str
+    route: str = ""
+    tier: str = ""
+    prompt: str = ""
+    prompt_version: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    latency_ms: int = 0
+    ok: bool = True
+    quality: float | None = None
+    detail: str = ""
+    ts: float = 0.0
+
+
+@dataclass
+class EvalResult:
+    suite: str
+    total: int
+    passed: int
+    accuracy: float
+    hallucination_rate: float
+    quality: float
+    status: str                      # pass | fail
+    prompt: str = ""
+    prompt_version: str = ""
+    detail: str = ""
+    ts: float = 0.0
 
 
 class Store:
@@ -334,6 +408,69 @@ class Store:
             "WHERE source = ? ORDER BY ts DESC LIMIT 1",
             (source,),
         ).fetchone()
+
+    # -- llm calls (cost, routing tiers, drift) ---------------------------
+    def record_llm_call(self, call: "LLMCall", now: float | None = None) -> None:
+        ts = call.ts or (time.time() if now is None else now)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO llm_calls "
+                "(ts, model, route, tier, prompt, prompt_version, input_tokens, "
+                " output_tokens, cost_usd, latency_ms, ok, quality, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts, call.model, call.route, call.tier, call.prompt,
+                 call.prompt_version, int(call.input_tokens), int(call.output_tokens),
+                 float(call.cost_usd), int(call.latency_ms), 1 if call.ok else 0,
+                 call.quality, call.detail),
+            )
+            self._conn.execute(
+                "DELETE FROM llm_calls WHERE ts < ?",
+                (ts - self._retention_seconds,),
+            )
+            self._conn.commit()
+
+    def llm_calls_since(self, since_ts: float) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM llm_calls WHERE ts >= ? ORDER BY ts", (since_ts,)
+        ).fetchall()
+
+    def recent_llm_calls(self, limit: int = 50) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM llm_calls ORDER BY ts DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+    # -- llm evals (accuracy + hallucination/quality) ---------------------
+    def record_llm_eval(self, result: "EvalResult", now: float | None = None) -> None:
+        ts = result.ts or (time.time() if now is None else now)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO llm_evals "
+                "(ts, suite, prompt, prompt_version, total, passed, accuracy, "
+                " hallucination_rate, quality, status, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts, result.suite, result.prompt, result.prompt_version,
+                 int(result.total), int(result.passed), float(result.accuracy),
+                 float(result.hallucination_rate), float(result.quality),
+                 result.status, result.detail),
+            )
+            self._conn.execute(
+                "DELETE FROM llm_evals WHERE ts < ?",
+                (ts - self._retention_seconds,),
+            )
+            self._conn.commit()
+
+    def latest_eval(self, suite: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM llm_evals WHERE suite = ? ORDER BY ts DESC LIMIT 1",
+            (suite,),
+        ).fetchone()
+
+    def evals_for(self, suite: str, limit: int = 20) -> list[sqlite3.Row]:
+        rows = self._conn.execute(
+            "SELECT * FROM llm_evals WHERE suite = ? ORDER BY ts DESC LIMIT ?",
+            (suite, limit),
+        ).fetchall()
+        return list(reversed(rows))
 
     # -- alerts -----------------------------------------------------------
     def record_alert(self, source: str, severity: str, title: str,

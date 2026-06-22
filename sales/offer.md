@@ -1,4 +1,4 @@
-# OpsWatch: your automations, deployed on your own server and watched around the clock
+# OpsWatch: your automations and AI features, deployed on your own server and watched around the clock
 
 I deploy a self-hosted operations stack on your VPS that runs your jobs on a
 schedule, checks that they keep working, and messages you the second something
@@ -21,6 +21,8 @@ The usual setups make this worse, not better:
   one wants to touch.
 - You are paying for five different tools (a scheduler, a monitor, an alerter)
   that do not talk to each other.
+- Your AI features run up a model bill nobody can break down by feature, and a
+  prompt change quietly drops their quality with no test to catch it.
 
 You do not need another SaaS subscription. You need automations that run on
 infrastructure you control and that tell you the moment they break.
@@ -42,6 +44,13 @@ A compact operations stack I install on your server:
 - **A polished dashboard** with a live status board, per-monitor history, an
   incident timeline, and uptime and SLA figures across 24 hour, 7 day, and 30
   day windows, themed to your brand with an optional login in front of it.
+- **LLM observability** for any AI feature you run: dollar cost per call and per
+  thousand predictions, projected monthly spend at your volume, spend split by
+  model, by route, and by cheap, standard, or hard tier, prompt and version
+  drift detection, and a labeled eval harness that scores accuracy and
+  hallucinations as a pass or fail with a trend. A cost spike, a drifting
+  prompt, or a failing eval raises an alert just like a server outage. It works
+  with Claude or any OpenAI-compatible API, and no key leaves your server.
 
 It runs on standard Python with no external dependencies, so it installs on a
 plain Linux box and keeps running whether or not I am around.
@@ -51,6 +60,8 @@ plain Linux box and keeps running whether or not I am around.
 - Everything running on a server you own, with no per-task fees.
 - A documented runbook so you or anyone on your team can operate it.
 - Alerts that reach you before your customers feel the problem.
+- A real-dollar picture of what your AI features cost, by model and by tier, and
+  whether they still pass their evals after a change.
 - One flat cost in place of a stack of metered subscriptions.
 
 ## Pricing

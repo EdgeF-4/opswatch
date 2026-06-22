@@ -103,6 +103,38 @@ for i in incs[:6]:
 PY
 
 echo
-echo "Demo complete. Three failures were caught and cleared automatically, each"
-echo "recorded as an incident with its own uptime impact. In production these"
-echo "alerts also land in Slack, Telegram, email, or any webhook you wire up."
+echo "4) LLM observability: a normal hour of model traffic, then a prompt change"
+echo "   that runs longer and pricier, plus an accuracy eval on a labeled set..."
+python3 "$ROOT/scripts/llm_demo.py" "$URL" "$OPSWATCH_INGEST_TOKEN" >/dev/null || true
+PYTHONPATH="$ROOT" OPSWATCH_STORE_PATH="$RUN_DIR/opswatch.db" \
+  python3 -m opswatch.evalrun --config "$ROOT/config.demo.json" || true
+sleep 4
+python3 - "$URL" <<'PY' || true
+import json, sys, urllib.request
+try:
+    d = json.load(urllib.request.urlopen(sys.argv[1] + "/api/llm", timeout=5))
+except Exception as e:
+    print(f"  (waiting for dashboard: {e})"); raise SystemExit
+c = d["cost"]
+proj = c["projected_monthly_at_scale_usd"]
+proj = proj if proj is not None else c["projected_monthly_runrate_usd"]
+print(f"  spend (last hour): ${c['total_cost_usd']:.2f} over {c['predictions']} predictions"
+      f"  ->  ${c['dollars_per_1k']:.2f} per 1k, ${proj:,.0f}/mo projected at scale")
+print("  spend by tier: " + ", ".join(
+    f"{t['key']} ${t['cost_usd']:.2f} ({t['share_pct']:.0f}%)" for t in c["by_tier"]))
+for p in d["drift"]:
+    if p["drifted"]:
+        print(f"  drift: prompt '{p['name']}' {p['candidate_version']} vs "
+              f"{p['baseline_version']}: " + "; ".join(p["reasons"]))
+for e in d["evals"]:
+    L = e["latest"]
+    if L:
+        print(f"  eval '{e['name']}': {L['status'].upper()} at "
+              f"{L['accuracy']*100:.0f}% accuracy, {L['hallucination_rate']*100:.0f}% hallucination")
+PY
+
+echo
+echo "Demo complete. The stack caught failing jobs and monitors, and on the LLM"
+echo "side it tracked dollar cost per tier, flagged a prompt that drifted after a"
+echo "change, and graded a labeled eval set. In production these alerts also land"
+echo "in Slack, Telegram, email, or any webhook you wire up."

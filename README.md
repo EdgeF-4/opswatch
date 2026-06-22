@@ -27,9 +27,23 @@ library Python only, so it installs on a fresh Linux box with nothing but
   (healthy to failing, and back), so you get one alert per incident, not a flood.
 - **Uptime and SLA reporting** with time-weighted uptime across 24h, 7d, and 30d
   windows, incident counts, and mean time to recovery per target.
+- **LLM observability** for any AI feature you run, alongside the infrastructure
+  monitors:
+  - dollar **cost** per call and per 1000 predictions, projected monthly spend
+    at scale, broken down by model and by route
+  - a **routing-tier** view so you see spend split across cheap, standard, and
+    hard model tiers
+  - prompt and version **drift** detection that flags when outputs or quality
+    shift after a prompt change
+  - a labeled-dataset **eval harness** that scores accuracy and
+    hallucination/quality as a pass or fail with a trend
+  - the same multi-channel **alerting** when cost spikes or an eval or drift
+    crosses a threshold
+  Config-driven and provider-agnostic: it works with Claude or any
+  OpenAI-compatible API, and no key is stored in the config or the repo.
 - **A polished dashboard** with a status board, per-monitor history strips, an
-  incident timeline, and an SLA report, all on one self-contained page. No
-  front-end build, no CDN, nothing external to load.
+  incident timeline, an SLA report, and an LLM panel, all on one self-contained
+  page. No front-end build, no CDN, nothing external to load.
 - **Optional built-in login** so the dashboard is safe to expose, and an
   optional token-gated ingest endpoint for the heartbeat and webhook monitors.
 - **White-label theming**: brand name, logo, tagline, colors, and footer all
@@ -46,8 +60,11 @@ scripts/demo.sh
 It starts the stack on a throwaway database and drives a realistic incident: a
 monitored API goes down, a data pipeline reports a failure, and a scheduled sync
 stops checking in. You watch all three get caught, alert, and then clear, with
-each one recorded as an incident that dents the uptime number. Open the
-dashboard URL it prints to follow along live.
+each one recorded as an incident that dents the uptime number. It then seeds an
+hour of model traffic across the cheap, standard, and hard tiers, ships a prompt
+change that drifts, and grades a labeled eval set, so the LLM panel shows live
+cost, a drift flag, and eval health. Open the dashboard URL it prints to follow
+along live.
 
 ## Run it directly
 
@@ -143,12 +160,66 @@ curl -fsS -X POST "$DASH/api/ingest" -H "X-OpsWatch-Token: $TOKEN" \
   -d '{"source": "nightly-etl", "status": "fail", "detail": "exit 1"}'
 ```
 
+### LLM observability
+
+Turn on the `llm` block in the config (off by default; see `config.example.json`
+for the full reference). You declare a price book per model, which tier each
+model belongs to, the prompts to track for drift, the eval suites to run, and
+the cost / drift / eval thresholds that raise an alert:
+
+```json
+{
+  "llm": {
+    "enabled": true,
+    "cost_window_seconds": 3600,
+    "scale_predictions_per_month": 1000000,
+    "pricing": {
+      "fast-mini":       { "input_per_million": 0.15, "output_per_million": 0.60, "tier": "cheap" },
+      "general":         { "input_per_million": 3.00, "output_per_million": 15.00, "tier": "standard" },
+      "reasoning-large": { "input_per_million": 15.00, "output_per_million": 75.00, "tier": "hard" }
+    },
+    "prompts": [ { "name": "extract", "baseline_version": "v3" } ],
+    "eval_suites": [ { "name": "extraction-accuracy", "dataset": "datasets/extraction.json",
+                       "min_accuracy": 0.85, "max_hallucination": 0.05 } ],
+    "thresholds": { "cost_per_window_usd": 5.0, "projected_monthly_usd": 3000 }
+  }
+}
+```
+
+Your application reports each prediction to the token-gated ingest endpoint. The
+stack prices it from your table (cost and tier are computed server-side) and the
+LLM panel fills in. The body is provider-agnostic, the same shape whether the
+call went to Claude or an OpenAI-compatible API:
+
+```bash
+curl -fsS -X POST "$DASH/api/llm/ingest" -H "X-OpsWatch-Token: $TOKEN" \
+  -d '{"model": "general", "route": "summarize", "prompt": "extract",
+       "prompt_version": "v3", "input_tokens": 1500, "output_tokens": 350,
+       "ok": true, "quality": 0.92}'
+```
+
+Run the eval harness against your labeled sets, which records a pass or fail and
+a trend (and exits non-zero on a failure, so it doubles as a monitored job):
+
+```bash
+python3 -m opswatch.evalrun --config config.json            # all suites
+python3 -m opswatch.evalrun --config config.json --suite extraction-accuracy
+```
+
+A dataset is a JSON list (or JSONL) of records with an `input` and an `expected`
+answer, optionally a grounding `context` and an explicit `quality`. Predictions
+come from a `prediction` field already on each record (offline replay, no key
+needed) or from a `predict(input)` callable you wire to your own model.
+
 ## Extending it
 
 - **Add a built-in job:** write a function returning `(exit_code, output)` and
   register it in `opswatch/jobs.py`.
 - **Add a monitor type:** write a `check_*` function returning `(ok, detail)` and
   wire it into `MonitorRunner.run_check` in `opswatch/monitors.py`.
+- **LLM modules:** cost and tier rollups live in `opswatch/llmcost.py`, drift in
+  `opswatch/llmdrift.py`, the eval harness in `opswatch/llmeval.py`, and the
+  price book, watch loop, and dashboard panel in `opswatch/llm.py`.
 
 ## Tests
 

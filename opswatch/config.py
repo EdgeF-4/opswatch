@@ -54,6 +54,17 @@ DEFAULTS = {
     "reporting": {
         "windows": [["24h", 86400], ["7d", 604800], ["30d", 2592000]],
     },
+    "llm": {
+        "enabled": False,
+        "tick_seconds": 30,
+        "cost_window_seconds": 3600,
+        "scale_predictions_per_month": None,
+        "pricing": {},
+        "tiers": {},
+        "prompts": [],
+        "eval_suites": [],
+        "thresholds": {},
+    },
 }
 
 
@@ -69,6 +80,7 @@ class Config:
     ingest: dict
     notifications: dict
     reporting: dict
+    llm: dict
     raw: dict = field(default_factory=dict)
 
     @property
@@ -132,5 +144,6 @@ def load(path: str | None) -> Config:
         ingest=data["ingest"],
         notifications=data["notifications"],
         reporting=data["reporting"],
+        llm=data["llm"],
         raw=data,
     )

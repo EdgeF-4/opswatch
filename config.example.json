@@ -144,5 +144,44 @@
 
   "reporting": {
     "windows": [["24h", 86400], ["7d", 604800], ["30d", 2592000]]
+  },
+
+  "llm": {
+    "enabled": false,
+    "tick_seconds": 30,
+    "cost_window_seconds": 3600,
+    "scale_predictions_per_month": 1000000,
+    "pricing": {
+      "fast-mini":       { "input_per_million": 0.15, "output_per_million": 0.60, "tier": "cheap" },
+      "general":         { "input_per_million": 3.00, "output_per_million": 15.00, "tier": "standard" },
+      "reasoning-large": { "input_per_million": 15.00, "output_per_million": 75.00, "tier": "hard" }
+    },
+    "tiers": {
+      "cheap": ["fast-mini"],
+      "standard": ["general"],
+      "hard": ["reasoning-large"]
+    },
+    "prompts": [
+      { "name": "extract", "baseline_version": "v3" }
+    ],
+    "eval_suites": [
+      {
+        "name": "extraction-accuracy",
+        "dataset": "datasets/extraction.json",
+        "min_accuracy": 0.85,
+        "max_hallucination": 0.05
+      }
+    ],
+    "thresholds": {
+      "cost_per_window_usd": 5.0,
+      "projected_monthly_usd": 3000,
+      "drift": {
+        "output_tokens_pct": 0.25,
+        "quality_drop": 0.10,
+        "error_rate_increase": 0.10,
+        "cost_pct": 0.50,
+        "min_samples": 20
+      }
+    }
   }
 }

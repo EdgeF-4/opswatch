@@ -2,11 +2,11 @@
 
 ## SEO title (leads with the tool name)
 
-**OpsWatch: self-hosted automation monitoring and failure alerts deployed on your VPS (n8n, Make, cron, APIs)**
+**OpsWatch: self-hosted automation and AI monitoring deployed on your VPS, with LLM cost tracking, drift and eval alerts (n8n, Make, cron, APIs, Claude, OpenAI)**
 
 Alternate, shorter:
 
-**OpsWatch: deploy your automations on your own VPS with monitoring and 24/7 failure alerts**
+**OpsWatch: deploy your automations and AI features on your own VPS with monitoring, LLM cost control, and 24/7 alerts**
 
 ## Project Catalog title (Upwork requires the "You will get" prefix, keep it short)
 
@@ -19,7 +19,9 @@ Alternate, shorter:
 Other keywords to seed into the overview and skills: workflow automation, Make.com,
 Zapier alternative, API integration, webhook, cron, DevOps, uptime monitoring,
 SLA reporting, heartbeat monitoring, incident alerting, status dashboard,
-alerting, server setup.
+alerting, server setup, LLM observability, LLM cost tracking, token cost,
+prompt drift, eval harness, hallucination monitoring, AI quality monitoring,
+Claude, OpenAI, LLMOps.
 
 ---
 
@@ -35,6 +37,15 @@ your jobs on a schedule, watches that they keep working, and messages you the
 second something breaks. You own the server and the code, so there is no
 per-task billing and no tool that can hike its price or remove a feature you
 depend on.
+
+If you ship AI features, the same stack now watches those too. It tracks what
+every model call and prediction costs in real dollars, shows you the cost per
+thousand predictions and what that projects to monthly at your volume, splits
+spend across your cheap, standard, and hard model tiers, flags a prompt whose
+output or quality shifts after you change it, and runs your labeled test sets to
+catch a drop in accuracy or a rise in hallucinations before your users do. It
+works with Claude or any OpenAI-compatible API, and your keys never leave your
+server.
 
 Here is what I install and configure for you:
 
@@ -52,6 +63,12 @@ Here is what I install and configure for you:
   incident timeline, and uptime and SLA figures across 24 hour, 7 day, and 30
   day windows, so you can answer "is everything running, and how has it been" at
   a glance.
+- LLM observability for any AI feature you run: dollar cost per call and per
+  thousand predictions, projected monthly spend at scale, spend broken down by
+  model, by route, and by cheap or standard or hard tier, prompt and version
+  drift detection, and a labeled eval harness that surfaces accuracy and
+  hallucination as a pass or fail with a trend. Cost spikes, drift, and failing
+  evals raise the same alerts as everything else.
 - Everything themed to your brand: your name, logo, and colors on the dashboard,
   with an optional login in front of it.
 
@@ -139,5 +156,16 @@ Yes. I deploy the monitoring and scheduling layer around whatever you already
 run, and I can move scheduled jobs onto your own server if you want off metered
 billing. A one-line check-in at the end of any existing job lets the dead-man's
 switch catch it the moment it stops running.
+
+**Can you track what my AI features actually cost and whether they still work?**
+Yes, and this is where most teams are flying blind. Your app reports each model
+call to the stack, which prices it from a table you control, so you see live
+dollar cost per prediction, cost per thousand, and projected monthly spend at
+your volume, split by model and by cheap, standard, or hard tier. It tracks your
+prompt versions and flags when a change makes outputs longer, pricier, lower
+quality, or more error prone, and it runs your labeled test sets to score
+accuracy and hallucinations so a quality regression pages you like any other
+outage. It works with Claude or any OpenAI-compatible API, and no key is ever
+stored in the config or the code.
 
 Message me with what you are running today and I will show you the live demo.

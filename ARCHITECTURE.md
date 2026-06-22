@@ -24,6 +24,7 @@ runtime unless you wire up an outbound alert channel.
                |              Store (SQLite)         |
                |  job_runs  state  alerts            |
                |  monitor_samples  incidents  ingest |
+               |  llm_calls  llm_evals               |
                +----------------+--------------------+
                                 |
                           on a state change
@@ -41,8 +42,9 @@ runtime unless you wire up an outbound alert channel.
 - **`store.py`** is the only stateful component. One SQLite connection guarded by
   a lock serves all threads. It records job runs, the current health state of
   every target, the alert log, a rolling per-monitor sample history, the
-  incidents opened and closed as things break and recover, and inbound ingest
-  events. `transition()` is the heart of it: it computes whether a status
+  incidents opened and closed as things break and recover, inbound ingest
+  events, and the recorded model calls and eval runs behind the LLM panel.
+  `transition()` is the heart of it: it computes whether a status
   actually changed (the single signal that gates alerting) and, on a real
   change, opens or closes the matching incident.
 - **`scheduler.py`** decides which jobs are due (`is_due`, a pure function that is
@@ -56,16 +58,31 @@ runtime unless you wire up an outbound alert channel.
   recovery, and the incident timeline from the incidents table. Uptime is the
   share of a window with no open incident, which is the figure an SLA is written
   against.
+- **LLM observability** is four modules that sit beside the infrastructure side.
+  `llmcost.py` rolls recorded calls up into dollar cost, cost per 1000
+  predictions, monthly projections, and the breakdown by model, route, and tier
+  (pure, the way `reporting.py` is pure). `llmdrift.py` compares a candidate
+  prompt version against a baseline and flags shifts in output length, quality,
+  error rate, or cost. `llmeval.py` scores a labeled dataset for accuracy and
+  hallucination/quality and decides pass or fail. `llm.py` is the integrator: a
+  `Pricing` book, the `record_call` ingestion seam, an `LLMRunner` loop that
+  watches cost, drift, and eval health and alerts through the shared notifier
+  (the LLM counterpart to `MonitorRunner`), and `build_llm_panel` for the
+  dashboard. `evalrun.py` is a CLI that runs the eval suites and records them.
 - **`notify.py`** fans an alert out to every configured channel. Each channel is
   independent and a delivery failure is logged, never raised, so a broken
   notification path can never take down the loop that produced the alert.
 - **`auth.py`** is the optional dashboard basic-auth gate, comparing credentials
   in constant time against a password or SHA-256 hash read from the environment.
 - **`dashboard.py`** serves one self-contained page and a handful of JSON APIs,
-  plus the token-gated ingest endpoint. The page is themed from the config at
-  request time, so the same binary white-labels to any brand.
-- **`__main__.py`** wires the pieces together, starts the three threads, and
-  shuts them down cleanly on a signal so it behaves under `systemd`.
+  plus the token-gated ingest endpoints. The page is themed from the config at
+  request time, so the same binary white-labels to any brand. The LLM view reads
+  `/api/llm`, and `/api/llm/ingest` accepts one prediction's metadata; both are
+  wired only when LLM observability is enabled, so the dashboard stays decoupled
+  from the LLM internals (it is handed a panel callable and an ingest callable).
+- **`__main__.py`** wires the pieces together, starts the loop threads (and the
+  LLM watch loop when enabled), and shuts them down cleanly on a signal so it
+  behaves under `systemd`.
 
 ## Why alerting only fires on a change
 
